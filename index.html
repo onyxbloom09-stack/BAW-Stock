@@ -118,11 +118,11 @@
     let originalData = [];
     let changes = {}; 
 
-    // URL DE TON IMAGE DOD
     const URL_IMAGE_DOD = "https://cdn.discordapp.com/attachments/1498327114385195119/1498423137489129613/dod.jpg?ex=69f11acb&is=69efc94b&hm=65aeb424a0d4cb59de711085fb6ab558553542cf74610826ec90d91e3b6346c4"; 
 
     function initGlitter() {
         const container = document.getElementById('glitter-container');
+        if(!container) return;
         for (let i = 0; i < 60; i++) {
             const g = document.createElement('div');
             g.className = 'glitter';
@@ -138,10 +138,7 @@
 
     async function sendDiscordEmbed(title, description, fields, isDelete = false) {
         if (!DISCORD_WEBHOOK) return;
-        
-        // Couleur Jaune Or (16761095) / Rouge pour suppression (15158332)
         const embedColor = isDelete ? 15158332 : 16761095;
-
         const payload = {
             embeds: [{
                 title: title,
@@ -153,7 +150,6 @@
                 timestamp: new Date().toISOString()
             }]
         };
-
         try {
             await fetch(DISCORD_WEBHOOK, {
                 method: 'POST',
@@ -168,29 +164,40 @@
         try {
             const resp = await fetch(API_URL);
             const data = await resp.json();
-            originalData = Array.isArray(data) ? data : [];
-            originalData.sort((a, b) => a.nom.localeCompare(b.nom, 'fr'));
+            // Sécurité : on s'assure que chaque item a un nom valide pour le tri
+            originalData = Array.isArray(data) ? data.filter(i => i && i.nom) : [];
+            originalData.sort((a, b) => String(a.nom).localeCompare(String(b.nom), 'fr'));
             render();
-        } catch (e) { render(); }
+        } catch (e) { console.error("Load error:", e); render(); }
     }
 
     function render() {
         const container = document.getElementById('inventory');
+        if (!originalData || originalData.length === 0) {
+            container.innerHTML = "<p style='text-align:center; width:100%; color:#555;'>Aucun item trouvé.</p>";
+            return;
+        }
+
         container.innerHTML = originalData.map(item => {
-            const imgSrc = (item.image && item.image.includes('http')) ? item.image : `images/${item.image}`;
+            // SÉCURITÉ : On force le nom en String pour éviter l'erreur toLowerCase()
+            const nameStr = String(item.nom || "Inconnu");
+            const imgSrc = (item.image && String(item.image).includes('http')) ? item.image : `images/${item.image}`;
+            const stockVal = item.stock || 0;
+
             return `
-            <div class="card" data-name="${item.nom.toLowerCase()}">
-                <button onclick="deleteItem(${item.id})" style="position:absolute; top:5px; right:5px; background:none; border:none; color:#ff4444; cursor:pointer;">✕</button>
+            <div class="card" data-name="${nameStr.toLowerCase()}">
+                <button onclick="deleteItem(${item.id})" style="position:absolute; top:5px; right:5px; background:none; border:none; color:#ff4444; cursor:pointer; font-weight:bold; z-index:10;">✕</button>
                 <img src="${imgSrc}" style="width:60px; height:60px; object-fit:contain;" onerror="this.src='https://cdn-icons-png.flaticon.com/512/702/702455.png'">
-                <div style="font-size:0.75rem; font-weight:bold; color:var(--steel); margin-top:5px;">${item.nom}</div>
-                <span class="item-stock">${item.stock}</span>
-                <input type="number" placeholder="+/-" oninput="trackChange(${item.id}, this.value, ${item.stock})">
+                <div style="font-size:0.75rem; font-weight:bold; color:var(--steel); margin-top:5px;">${nameStr}</div>
+                <span class="item-stock">${stockVal}</span>
+                <input type="number" placeholder="+/-" oninput="trackChange(${item.id}, this.value, ${stockVal})">
             </div>`;
         }).join('');
     }
 
     function trackChange(id, value, oldStock) {
-        if (value !== "" && value !== "0") changes[id] = oldStock + parseInt(value);
+        const val = parseInt(value);
+        if (!isNaN(val) && value !== "") changes[id] = oldStock + val;
         else delete changes[id];
     }
 
@@ -216,16 +223,19 @@
 
     async function submitChanges() {
         const user = document.getElementById('userName').value.trim();
-        if (!user || Object.keys(changes).length === 0) return alert("Nom ou modification manquante !");
+        if (!user) return alert("Indique ton nom avant d'enregistrer !");
+        if (Object.keys(changes).length === 0) return alert("Aucune modification à enregistrer.");
         
         let fields = [];
         const updates = Object.keys(changes).map(id => {
             const item = originalData.find(i => i.id == id);
-            fields.push({ 
-                name: `🔹 ${item.nom}`, 
-                value: `Mouvement : \`${item.stock}\` ➔ **${changes[id]}**`, 
-                inline: false 
-            });
+            if(item) {
+                fields.push({ 
+                    name: `🔹 ${item.nom}`, 
+                    value: `Mouvement : \`${item.stock}\` ➔ **${changes[id]}**`, 
+                    inline: false 
+                });
+            }
             return { id: parseInt(id), nouveauStock: changes[id] };
         });
 
@@ -241,8 +251,10 @@
 
     async function deleteItem(id) {
         const user = document.getElementById('userName').value.trim();
-        if (!user) return alert("Nom requis !");
-        const item = originalData.find(i => i.id === id);
+        if (!user) return alert("Indique ton nom pour supprimer !");
+        const item = originalData.find(i => i.id == id);
+        if (!item) return;
+
         if (confirm(`Supprimer définitivement ${item.nom} ?`)) {
             await fetch(API_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ action: 'delete', id: id }) });
             
@@ -259,11 +271,13 @@
     function filter(val) {
         const v = val.toLowerCase();
         document.querySelectorAll('.card').forEach(c => {
-            c.style.display = c.dataset.name.includes(v) ? 'block' : 'none';
+            const name = c.getAttribute('data-name') || "";
+            c.style.display = name.includes(v) ? 'block' : 'none';
         });
     }
 
     function toggleModal(show) { document.getElementById('modalAdd').style.display = show ? 'flex' : 'none'; }
+    
     window.onload = load;
 </script>
 </body>
